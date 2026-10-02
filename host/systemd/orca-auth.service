@@ -1,0 +1,20 @@
+[Unit]
+Description=Orca self-hosted auth (single-user sign-in + relay token issuer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=orca
+EnvironmentFile=/etc/orca-selfhost/auth.env
+WorkingDirectory=/opt/orca-selfhost/auth
+ExecStart=/opt/orca-selfhost/bin/node server.mjs
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/orca-selfhost/auth
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

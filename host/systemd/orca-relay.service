@@ -1,0 +1,21 @@
+[Unit]
+Description=Orca relay (combined director + cell)
+After=network-online.target orca-auth.service
+Wants=network-online.target
+
+[Service]
+User=orca
+EnvironmentFile=/etc/orca-selfhost/relay.env
+WorkingDirectory=/opt/orca-selfhost/relay
+ExecStart=/opt/orca-selfhost/bin/node --no-warnings=ExperimentalWarning dist/index.js
+Restart=always
+RestartSec=3
+LimitNOFILE=65536
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/orca-selfhost/relay
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
