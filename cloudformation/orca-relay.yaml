@@ -1,0 +1,355 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Self-hosted Orca mobile relay + single-user auth. CloudFront default domain
+  (publicly trusted cert, no custom domain needed) -> VPC origin -> private EC2
+  with no public IP. Only CloudFront is reachable from the internet.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC to deploy into (the default VPC works). It must have an internet gateway attached, which CloudFront VPC origins require.
+  PrivateSubnetCidr:
+    Type: String
+    Default: 172.31.128.0/24
+    Description: Unused CIDR inside the VPC for the new private subnet
+  AvailabilityZone:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Description: AZ for the private subnet (must offer the instance type)
+  InstanceType:
+    Type: String
+    Default: t4g.small
+    AllowedValues: [t4g.micro, t4g.small, t4g.medium]
+  OwnerEmail:
+    Type: String
+    Description: Shown on the sign-in page
+  OwnerPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 12
+    AllowedPattern: "[A-Za-z0-9]+"
+    ConstraintDescription: 12+ letters and digits
+    Description: Password for the browser sign-in the Orca desktop opens
+  CloudFrontPrefixListId:
+    Type: String
+    AllowedPattern: "pl-[0-9a-f]+"
+    Description: >-
+      ID of the com.amazonaws.global.cloudfront.origin-facing managed prefix list in this
+      region (aws ec2 describe-managed-prefix-lists --filters Name=prefix-list-name,Values=com.amazonaws.global.cloudfront.origin-facing)
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+
+Resources:
+  # ---------- bundle bucket (filled by build-artifacts.sh after the stack is created) ----------
+  BundleBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  # ---------- network: private subnet, only S3 + SSM endpoints, no internet route ----------
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VpcId
+      CidrBlock: !Ref PrivateSubnetCidr
+      AvailabilityZone: !Ref AvailabilityZone
+      MapPublicIpOnLaunch: false
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-private" }]
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VpcId
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-private" }]
+
+  PrivateRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet
+      RouteTableId: !Ref PrivateRouteTable
+
+  S3Endpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
+      VpcEndpointType: Gateway
+      RouteTableIds: [!Ref PrivateRouteTable]
+
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Orca relay instance - relay and auth ports from CloudFront only
+      VpcId: !Ref VpcId
+      # One rule for both ports: the CloudFront prefix list weighs ~55 of the 60-rule quota.
+      SecurityGroupIngress:
+        - Description: relay (8080) and auth (8787) from CloudFront
+          IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8787
+          SourcePrefixListId: !Ref CloudFrontPrefixListId
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-instance" }]
+
+  EndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SSM interface endpoints, reachable only from the relay instance
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - Description: HTTPS from relay instance
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref InstanceSecurityGroup
+
+  SsmEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.ssm
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref PrivateSubnet]
+      SecurityGroupIds: [!Ref EndpointSecurityGroup]
+
+  SsmMessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.ssmmessages
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref PrivateSubnet]
+      SecurityGroupIds: [!Ref EndpointSecurityGroup]
+
+  Ec2MessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.ec2messages
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref PrivateSubnet]
+      SecurityGroupIds: [!Ref EndpointSecurityGroup]
+
+  # ---------- instance ----------
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: !Sub "ec2.${AWS::URLSuffix}" }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: orca-relay-host
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub ${BundleBucket.Arn}/*
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource:
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}/*
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref InstanceRole]
+
+  RelayInstance:
+    Type: AWS::EC2::Instance
+    DependsOn: [S3Endpoint, SsmEndpoint, SsmMessagesEndpoint, Ec2MessagesEndpoint, PrivateRouteTableAssociation]
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref InstanceProfile
+      MetadataOptions:
+        HttpTokens: required
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs: { VolumeSize: 20, VolumeType: gp3, Encrypted: true }
+      NetworkInterfaces:
+        - DeviceIndex: "0"
+          SubnetId: !Ref PrivateSubnet
+          AssociatePublicIpAddress: false
+          GroupSet: [!Ref InstanceSecurityGroup]
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-relay" }]
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          # The installer reads the CloudFront domain from SSM, so it can only finish
+          # after the distribution exists and the bundle has been uploaded; retry for 2 hours.
+          set -u
+          mkdir -p /etc/orca-selfhost
+          umask 077
+          cat > /etc/orca-selfhost/site.env <<'EOF'
+          RELAY_DOMAIN_PARAM=/${AWS::StackName}/domain
+          OWNER_EMAIL=${OwnerEmail}
+          OWNER_PASSWORD=${OwnerPassword}
+          BUNDLE_S3_URI=s3://${BundleBucket}/orca-selfhost.tar.gz
+          AWS_REGION=${AWS::Region}
+          EOF
+          sed -i 's/^ *//' /etc/orca-selfhost/site.env
+          for i in $(seq 1 240); do
+            if aws s3 cp s3://${BundleBucket}/orca-selfhost.tar.gz /tmp/bundle.tar.gz --region ${AWS::Region} --only-show-errors \
+              && tar -xzf /tmp/bundle.tar.gz -C /tmp orca-selfhost/install.sh \
+              && install -m 0755 /tmp/orca-selfhost/install.sh /usr/local/sbin/orca-selfhost-install \
+              && /usr/local/sbin/orca-selfhost-install; then
+              break
+            fi
+            sleep 30
+          done > /var/log/orca-selfhost-install.log 2>&1
+
+  # ---------- CloudFront ----------
+  RelayVpcOrigin:
+    Type: AWS::CloudFront::VpcOrigin
+    Properties:
+      VpcOriginEndpointConfig:
+        Name: !Sub ${AWS::StackName}-relay
+        Arn: !Sub arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${RelayInstance}
+        HTTPPort: 8080
+        HTTPSPort: 443
+        OriginProtocolPolicy: http-only
+
+  AuthVpcOrigin:
+    Type: AWS::CloudFront::VpcOrigin
+    Properties:
+      VpcOriginEndpointConfig:
+        Name: !Sub ${AWS::StackName}-auth
+        Arn: !Sub arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${RelayInstance}
+        HTTPPort: 8787
+        HTTPSPort: 443
+        OriginProtocolPolicy: http-only
+
+  # Never cache, but keep Authorization: CloudFront only forwards it as part of the cache key.
+  PassthroughCachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties:
+      CachePolicyConfig:
+        Name: !Sub ${AWS::StackName}-passthrough
+        MinTTL: 0
+        DefaultTTL: 0
+        MaxTTL: 1
+        ParametersInCacheKeyAndForwardedToOrigin:
+          EnableAcceptEncodingGzip: false
+          EnableAcceptEncodingBrotli: false
+          HeadersConfig:
+            HeaderBehavior: whitelist
+            Headers: [Authorization]
+          CookiesConfig:
+            CookieBehavior: none
+          QueryStringsConfig:
+            QueryStringBehavior: all
+
+  BlockAdminFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: !Sub ${AWS::StackName}-block-admin
+      AutoPublish: true
+      FunctionConfig:
+        Comment: Relay operator routes are never reachable from the internet
+        Runtime: cloudfront-js-2.0
+      FunctionCode: |
+        function handler(event) {
+          if (event.request.uri.startsWith('/v1/admin/')) {
+            return { statusCode: 404, statusDescription: 'Not Found' };
+          }
+          return event.request;
+        }
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub Orca self-hosted relay (${AWS::StackName})
+        HttpVersion: http1.1
+        IPV6Enabled: true
+        PriceClass: PriceClass_All
+        Origins:
+          - Id: relay
+            DomainName: !GetAtt RelayInstance.PrivateDnsName
+            VpcOriginConfig:
+              VpcOriginId: !Ref RelayVpcOrigin
+              OriginReadTimeout: 60
+              OriginKeepaliveTimeout: 60
+          - Id: auth
+            DomainName: !GetAtt RelayInstance.PrivateDnsName
+            VpcOriginConfig:
+              VpcOriginId: !Ref AuthVpcOrigin
+              OriginReadTimeout: 30
+              OriginKeepaliveTimeout: 5
+        CacheBehaviors:
+          - PathPattern: /v1/desktop/*
+            TargetOriginId: auth
+            ViewerProtocolPolicy: https-only
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+            CachedMethods: [GET, HEAD]
+            Compress: false
+            CachePolicyId: !Ref PassthroughCachePolicy
+            OriginRequestPolicyId: !FindInMap [CloudFront, OriginRequestPolicy, AllViewerExceptHostHeader]
+          - PathPattern: /.well-known/*
+            TargetOriginId: auth
+            ViewerProtocolPolicy: https-only
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+            CachedMethods: [GET, HEAD]
+            Compress: false
+            CachePolicyId: !Ref PassthroughCachePolicy
+            OriginRequestPolicyId: !FindInMap [CloudFront, OriginRequestPolicy, AllViewerExceptHostHeader]
+        DefaultCacheBehavior:
+          TargetOriginId: relay
+          ViewerProtocolPolicy: https-only
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+          CachedMethods: [GET, HEAD]
+          Compress: false
+          CachePolicyId: !Ref PassthroughCachePolicy
+          OriginRequestPolicyId: !FindInMap [CloudFront, OriginRequestPolicy, AllViewerExceptHostHeader]
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt BlockAdminFunction.FunctionMetadata.FunctionARN
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+
+  # The instance learns its public origin from here (it cannot be in user data:
+  # the distribution depends on the instance).
+  RelayDomainParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${AWS::StackName}/domain
+      Type: String
+      Value: !GetAtt Distribution.DomainName
+
+Mappings:
+  CloudFront:
+    OriginRequestPolicy:
+      AllViewerExceptHostHeader: b689b0a8-53d0-40ab-baf2-68738e2966ac
+
+Outputs:
+  RelayUrl:
+    Description: Use as both ORCA_CLOUD_API_URL and ORCA_RELAY_URL
+    Value: !Sub https://${Distribution.DomainName}
+  BundleBucket:
+    Description: Pass to build-artifacts.sh
+    Value: !Ref BundleBucket
+  InstanceId:
+    Value: !Ref RelayInstance
