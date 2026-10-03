@@ -68,6 +68,14 @@ node smoke-test.mjs https://dxxxx.cloudfront.net '<登录密码>'
 
 relay 每 15 秒有一次应用层心跳，CloudFront 的 WebSocket 空闲超时不会触发。
 
+## 升级 Orca 后会不会失效
+
+更新 Orca.app **不会**让本机设置失效：LaunchAgent 和 App 本身无关。真正要防的是**新版桌面端和自建服务端协议不兼容**，比如需要更新的 relay、登录接口格式变了。
+
+**习惯：每次更新 Orca 后，把 relay 也升到同一版本**（就是下面「运维」里的升级 relay 三条命令），再跑一次 `smoke-test.mjs`。
+
+出问题时的排查顺序、风险清单和回退办法见 **[docs/upgrading.md](docs/upgrading.md)**。
+
 ## 运维
 
 ```bash
@@ -120,5 +128,6 @@ aws ssm send-command --region ap-east-1 --instance-ids <InstanceId> \
 | `auth/server.mjs` | 单用户登录 + relay token 签发 |
 | `host/` | 机器上的安装脚本和 systemd 单元 |
 | `build-artifacts.sh` | 本机打包并上传到 S3 |
+| `docs/upgrading.md` | 升级 Orca / relay 的兼容性说明与排查 |
 | `smoke-test.mjs` | 端到端验证（模拟桌面端完整流程 + WebSocket 升级） |
 | `macos/install-env.sh` | 本机一次性设置：让 Orca 始终连自建 relay（LaunchAgent） |
