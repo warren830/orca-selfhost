@@ -46,6 +46,21 @@ node smoke-test.mjs https://dxxxx.cloudfront.net '<登录密码>'
 ## 桌面端接入
 
 1. 在 Clash 等代理软件里给 `dxxxx.cloudfront.net` 加 **DIRECT** 规则（只加这一个分发域名，不要整个 `cloudfront.net`）。走代理时一旦切节点，WebSocket 长连接会被掐断。
+
+   **Clash Party（mihomo-party）**：用全局覆写，订阅更新后也不会丢。
+   1. Clash Party → 覆写 → 新建 → JavaScript，名字随意（例如「Orca 自建 relay 直连」），内容如下：
+      ```js
+      function main(config) {
+        config.rules = ['DOMAIN,dxxxx.cloudfront.net,DIRECT'].concat(config.rules || [])
+        return config
+      }
+      ```
+   2. 打开这条覆写的「全局」开关，保存。Clash Party 会重新生成配置并生效。
+   3. 验证：在「规则」页搜索 `cloudfront.net`，它应该排在第一条、目标是 `DIRECT`。也可以在终端里执行 `curl -x http://127.0.0.1:7890 -o /dev/null -w '%{http_code}\n' https://dxxxx.cloudfront.net/health`（返回 200），然后在「连接」页确认这条连接走的是 `DIRECT`。
+
+   **其他 Clash / mihomo 客户端**：把 `DOMAIN,dxxxx.cloudfront.net,DIRECT` 加到配置文件 `rules:` 的第一行。
+
+   手机上如果也开着代理，同样要加这条规则，或者测试时先关掉代理。
 2. 一次性设置本机（之后从 Dock / Spotlight 正常打开 Orca 就行，重启电脑也一直有效）：
    ```bash
    ./macos/install-env.sh dxxxx.cloudfront.net
