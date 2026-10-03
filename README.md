@@ -46,11 +46,13 @@ node smoke-test.mjs https://dxxxx.cloudfront.net '<登录密码>'
 ## 桌面端接入
 
 1. 在 Clash 等代理软件里给 `dxxxx.cloudfront.net` 加 **DIRECT** 规则（只加这一个分发域名，不要整个 `cloudfront.net`）。走代理时一旦切节点，WebSocket 长连接会被掐断。
-2. 完全退出 Orca（Cmd+Q），用自建地址启动：
+2. 一次性设置本机（之后从 Dock / Spotlight 正常打开 Orca 就行，重启电脑也一直有效）：
    ```bash
-   RELAY_DOMAIN=dxxxx.cloudfront.net ./launch-orca.sh
+   ./macos/install-env.sh dxxxx.cloudfront.net
    ```
-   它给 Orca.app 注入 `ORCA_CLOUD_API_URL` / `ORCA_CLOUD_CLIENT_ID` / `ORCA_RELAY_URL`。打包版 Orca 只接受 HTTPS 地址，所以必须先部署好再接入。
+   Orca 只从环境变量读 `ORCA_CLOUD_API_URL` / `ORCA_CLOUD_CLIENT_ID` / `ORCA_RELAY_URL`，没有设置界面。这个脚本装一个 LaunchAgent，每次登录时用 `launchctl setenv` 把它们设进用户会话，所有 GUI 启动的 Orca 都会继承。装完后 **Cmd+Q 退出 Orca 再打开一次**才生效（已经在运行的进程不会更新）。打包版 Orca 只接受 HTTPS 地址，所以必须先部署好再接入。
+
+   切回官方 relay：`./macos/install-env.sh --uninstall`，再重开 Orca。
 3. 在 Orca 里**新建一个本地 profile** 再登录（换了登录服务后，官方账号的登录态会失效）。浏览器会打开 “Orca relay sign-in”，输入密码。
 4. 移动端配对选 **Anywhere / Relay**，手机扫码即可——二维码里带了 relay 地址，手机不用任何设置。
 
@@ -119,4 +121,4 @@ aws ssm send-command --region ap-east-1 --instance-ids <InstanceId> \
 | `host/` | 机器上的安装脚本和 systemd 单元 |
 | `build-artifacts.sh` | 本机打包并上传到 S3 |
 | `smoke-test.mjs` | 端到端验证（模拟桌面端完整流程 + WebSocket 升级） |
-| `launch-orca.sh` | 用自建地址启动 Orca.app |
+| `macos/install-env.sh` | 本机一次性设置：让 Orca 始终连自建 relay（LaunchAgent） |
