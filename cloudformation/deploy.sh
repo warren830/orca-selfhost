@@ -58,4 +58,4 @@ if [ -n "${password:-}" ]; then
 fi
 echo "The instance installs itself within a few minutes; then run:"
 echo "  node smoke-test.mjs $url <password>"
-echo "  RELAY_DOMAIN=${url#https://} ./launch-orca.sh"
+echo "  ./macos/install-env.sh ${url#https://}"
