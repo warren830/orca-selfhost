@@ -31,6 +31,20 @@ echo "==> relay (orca $(git -C "$ORCA_DIR" rev-parse --short HEAD))"
 rm -rf "$OUT/relay/src" "$OUT/relay/node_modules/@orca-cloud"/*/src
 git -C "$ORCA_DIR" rev-parse HEAD > "$OUT/relay/ORCA_COMMIT"
 
+# Upstream combined mode only accepts assignment epoch 1, but every re-placement (e.g. a
+# lease that expired while the Mac slept) bumps the epoch and locks the host out with
+# relay_control_not_active. Check the stored epoch instead, as stamped cells do.
+node -e '
+const fs = require("fs")
+const file = process.argv[1]
+const from = "hello.data.assignmentEpoch === 1"
+const to = "await this.assignments.verifyCellAssignment({ userId: identity.sub, relayHostId: identity.relayHostId, cellId: this.config.cellId, assignmentEpoch: hello.data.assignmentEpoch })"
+const src = fs.readFileSync(file, "utf8")
+if (src.split(from).length !== 2) throw new Error(`relay patch: expected one "${from}" in ${file}; upstream changed`)
+fs.writeFileSync(file, src.replace(from, to))
+' "$OUT/relay/dist/host-session-registry.js"
+echo "    patched combined-mode assignment epoch check"
+
 echo "==> auth"
 mkdir -p "$OUT/auth"
 cp "$HERE/auth/server.mjs" "$HERE/auth/package.json" "$HERE/auth/package-lock.json" "$OUT/auth/"
