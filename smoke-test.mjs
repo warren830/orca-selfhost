@@ -1,11 +1,13 @@
 // End-to-end check of a deployed relay, the way the Orca desktop drives it:
 // PKCE sign-in -> session -> refresh -> relay-token -> /v1/assign -> host control WebSocket upgrade.
 // Usage: node smoke-test.mjs https://dxxxx.cloudfront.net <owner-password>
+// Borrows `ws` from the Orca checkout that build-artifacts.sh uses (ORCA_DIR, default ~/code/orca).
 import { createHash, randomBytes } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 
-const require = createRequire(`${homedir()}/code/orca/cloud/apps/relay/package.json`)
+const orcaDir = process.env.ORCA_DIR ?? `${homedir()}/code/orca`
+const require = createRequire(`${orcaDir}/cloud/apps/relay/package.json`)
 const WebSocket = require('ws')
 
 const [base, password] = process.argv.slice(2)
@@ -29,6 +31,8 @@ const post = (path, body, token) =>
     headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
     body: JSON.stringify(body)
   })
+// An error page (e.g. a CloudFront 502) should fail its check, not crash the run.
+const json = (res) => res.json().catch(() => ({}))
 
 const verifier = b64(randomBytes(32))
 const state = b64(randomBytes(16))
@@ -51,22 +55,22 @@ const location = login.headers.get('location')
 check('password login redirects to loopback', login.status === 302 && location?.startsWith(redirect), String(login.status))
 const code = location && new URL(location).searchParams.get('code')
 
-const session = await (await post('/v1/desktop/auth/session',
-  { code, codeVerifier: verifier, nonce, redirectUri: redirect, state, localProfileId: 'smoke-test' })).json()
+const session = await json(await post('/v1/desktop/auth/session',
+  { code, codeVerifier: verifier, nonce, redirectUri: redirect, state, localProfileId: 'smoke-test' }))
 check('session exchange', Boolean(session.accessToken) && session.capabilities?.flags?.['relay.use'] === true)
 
-const refreshed = await (await post('/v1/desktop/auth/refresh', { refreshToken: session.refreshToken })).json()
+const refreshed = await json(await post('/v1/desktop/auth/refresh', { refreshToken: session.refreshToken }))
 check('refresh keeps identity', refreshed.cloud?.cloudProfileId === session.cloud?.cloudProfileId)
 
 const publicKey = randomBytes(32)
 const relayHostId = b64(sha(publicKey)).slice(0, 16)
 const tokenResponse = await post('/v1/desktop/auth/relay-token',
   { relayHostId, hostPublicKeyB64: publicKey.toString('base64') }, refreshed.accessToken)
-const { relayToken } = await tokenResponse.json()
+const { relayToken } = await json(tokenResponse)
 check('relay token minted', tokenResponse.status === 200 && Boolean(relayToken), String(tokenResponse.status))
 
 const [assign, assignMs] = await timed(() => post('/v1/assign', { v: 1, relayHostId, reconnect: true }, relayToken))
-const assignment = await assign.json().catch(() => ({}))
+const assignment = await json(assign)
 check('director assignment', assign.status === 200 && assignment.cellUrl === base, `${assign.status}, ${assignMs}ms, cell ${assignment.cellUrl}`)
 
 const admin = await fetch(`${base}/v1/admin/drain`, { method: 'POST' })

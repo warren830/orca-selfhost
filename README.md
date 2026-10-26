@@ -20,14 +20,15 @@
 
 ## 一键部署（CloudFormation）
 
-前置：本机有 `aws` CLI、Node 22+、`pnpm`，并且把 Orca 源码 clone 到 `~/code/orca`（打包脚本要从里面构建 relay）。
+前置：本机有 `aws` CLI、Node 22+、`pnpm`，并且把 Orca 源码 clone 到 `~/code/orca`（打包脚本要从里面构建 relay；放在别处就设置 `ORCA_DIR`）。
 
 ```bash
 git clone https://github.com/stablyai/orca.git ~/code/orca
-git clone git@github.com:warren830/orca-selfhost.git ~/code/orca-selfhost
+git clone https://github.com/warren830/orca-selfhost.git ~/code/orca-selfhost
 cd ~/code/orca-selfhost
 
 # 栈名、区域、AWS profile；区域要有默认 VPC
+# 可选：OWNER_EMAIL=you@example.com（登录后 Orca 里显示的账号邮箱，默认 owner@localhost）
 ./cloudformation/deploy.sh orca-relay ap-east-1 default
 ```
 
@@ -41,7 +42,15 @@ cd ~/code/orca-selfhost
 node smoke-test.mjs https://dxxxx.cloudfront.net '<登录密码>'
 ```
 
-> 也可以用 Terraform：`terraform-hk/` 是同一套架构（`terraform apply` 后同样用 `build-artifacts.sh` 上传安装包）。两者二选一，不要同时部署到同一个 VPC——SSM 接口端点的私有 DNS 会冲突。
+> 也可以用 Terraform：`terraform-hk/` 是同一套架构。两者二选一，不要同时部署到同一个 VPC——SSM 接口端点的私有 DNS 会冲突。
+>
+> ```bash
+> terraform -chdir=terraform-hk init
+> terraform -chdir=terraform-hk apply            # 可选 -var aws_profile=... -var owner_email=...
+> ./build-artifacts.sh "$(terraform -chdir=terraform-hk output -raw bundle_bucket)" default ap-east-1
+> terraform -chdir=terraform-hk output -raw relay_url
+> terraform -chdir=terraform-hk output -raw owner_password   # 登录密码
+> ```
 
 ## 桌面端接入
 
@@ -109,7 +118,8 @@ aws ssm send-command --region ap-east-1 --instance-ids <InstanceId> \
 
 - 数据在 `/var/lib/orca-selfhost/`：auth 的签名密钥（首次启动生成）、relay 的 SQLite。重建机器会让桌面端需要重新登录、手机重新配对。
 - 改密码：在机器上改 `/etc/orca-selfhost/site.env` 里的 `OWNER_PASSWORD`，再执行 `sudo /usr/local/sbin/orca-selfhost-install`。（改 CloudFormation 参数或 Terraform 的 `random_password` 不会生效：user data 只在实例首次启动时执行。）
-- 删除：`aws cloudformation delete-stack --stack-name orca-relay`（先清空 S3 桶的所有版本），或 `terraform destroy`。
+- 改密码不会让已登录的设备下线（refresh token 有效期一年）。要让所有设备重新登录：`sudo rm /var/lib/orca-selfhost/auth/session-secret && sudo systemctl restart orca-auth`。
+- 删除：`aws cloudformation delete-stack --stack-name orca-relay`（先清空 S3 桶的所有版本），或 `terraform -chdir=terraform-hk destroy`（同样要先清空桶）。
 
 费用（香港，按月）：3 个 SSM 接口端点 ≈ $25，t4g.small + 20GB gp3 ≈ $15，CloudFront 按流量计（个人使用很少）。合计约 $40–50。不需要 SSM 远程运维时可以删掉接口端点省掉大头。
 
@@ -119,7 +129,9 @@ aws ssm send-command --region ap-east-1 --instance-ids <InstanceId> \
 - relay token：ES256 JWT，15 分钟有效；只给能证明持有对应主机公钥的 `relayHostId` 签（`relayHostId = sha256(公钥)` 的前 16 位）。
 - access / refresh token 与 relay token 用不同的密钥签发；relay 只接受 `aud=orca-relay` + `purpose=host-control` 的 token。
 - relay 的 `/v1/admin/*` 运维接口在 CloudFront 边缘就返回 404；即便漏过，它们也只认 Google 签发的服务账号身份，这里配置的是不存在的占位账号。
-- 密码只在 CloudFormation 的 NoEcho 参数 / Terraform state 和机器上的 `/etc/orca-selfhost/*.env`（0600）里。**不要把 tfstate 提交到仓库**（已在 `.gitignore`）。
+- auth 只监听 `127.0.0.1`，除非设置了 `HOST`；机器上的 systemd 单元把它设为 `0.0.0.0`，因为 CloudFront VPC Origin 要从私有子网连进来（安全组只放行 CloudFront，机器没有公网 IP）。
+- 公开的登录页不显示账号邮箱。
+- 密码存在 CloudFormation 的 NoEcho 参数 / Terraform state、EC2 user data（账号里有 `ec2:DescribeInstanceAttribute` 权限的人能读到），以及机器上的 `/etc/orca-selfhost/*.env`（0600）。**不要把 tfstate 提交到仓库**（已在 `.gitignore`）。
 
 ## 为什么是这个架构（踩过的坑）
 
@@ -128,8 +140,9 @@ aws ssm send-command --region ap-east-1 --instance-ids <InstanceId> \
 3. **试过放 AWS 中国区（宁夏），走不通**：
    - 中国区 CloudFront 的默认域名 `*.cloudfront.cn` 用的是 Amazon 内部 CA 证书（`internal.cloudfront.cn`），手机和 Orca 都不信任，且直接访问返回 403。
    - 必须绑定**在 AWS 中国做过接入备案**的域名 + 上传到 IAM 的证书。在腾讯等其他接入商备案不算——实测这种域名的 SNI 在大陆网络上会被直接黑洞（TCP 通，TLS 握手被切断）。
-   - 如果你的域名在 AWS 中国做过接入备案，`terraform-cn/` + `terraform-cn/renew-cert.sh`（acme.sh + DNSPod DNS-01，自动续期并轮换 CloudFront 证书）可以直接用，延迟会比海外低很多。
-4. **香港 + 海外 CloudFront 的实际延迟取决于你的运营商**。CloudFront 的边缘节点由 AWS 按线路质量调度，不能手动指定。实测有的联通线路被调度到美国西海岸节点（~230ms），强行连香港节点反而 430–500ms（联通普通国际出口绕路）。电信 CN2 / 移动通常会被分到香港，延迟几十毫秒。
+   - 如果你的域名在 AWS 中国做过接入备案，`terraform-cn/` + `terraform-cn/renew-cert.sh`（acme.sh + DNSPod DNS-01，自动续期并轮换 CloudFront 证书）可以直接用，延迟会比海外低很多。大致步骤：`terraform apply -var relay_domain=relay.example.com` → `DOMAIN=relay.example.com ACME_EMAIL=you@example.com ./renew-cert.sh` 签发证书 → `terraform apply -var relay_domain=... -var enable_cdn=true` → DNS 里把域名 CNAME 到 `cloudfront_domain_name` → 每天跑一次带 `DISTRIBUTION_ID` 的 `renew-cert.sh` 续期。
+   - 注意：中国区版本 CloudFront 到 ALB 走的是公网 HTTP（靠前缀列表 + 密钥头限制来源），没有加密。
+4. **香港 + 海外 CloudFront 的实际延迟取决于你的运营商**。CloudFront 的边缘节点由 AWS 按线路质量调度，不能手动指定。实测有的联通线路会被调度到美国西海岸节点（~230ms），强行连香港节点反而 430–500ms（联通普通国际出口绕路）。电信 CN2 / 移动通常会被分到香港，延迟几十毫秒。
 5. **安全组规则上限**：CloudFront 回源前缀列表一条规则就占 ~55 条配额（上限 60），所以 relay 和 auth 两个端口合成一条 8080–8787 的规则；Terraform 版本改为放行 CloudFront 自动创建的 `CloudFront-VPCOrigins-Service-SG`。
 6. **国内拉不动 GitHub / npm / Docker Hub**，所以机器上不构建任何东西：Node 运行时、relay、auth 全在本机打好包（`build-artifacts.sh`），机器只从同区域 S3 拉。
 
@@ -138,7 +151,7 @@ aws ssm send-command --region ap-east-1 --instance-ids <InstanceId> \
 | 路径 | 说明 |
 |---|---|
 | `cloudformation/` | **推荐**：一键部署模板 + `deploy.sh` |
-| `terraform-hk/` | 同架构的 Terraform 版本（当前线上用的是这个） |
+| `terraform-hk/` | 同架构的 Terraform 版本 |
 | `terraform-cn/` | AWS 中国区版本（CloudFront 中国 + ALB + IAM 证书），需要 AWS 中国接入备案的域名 |
 | `auth/server.mjs` | 单用户登录 + relay token 签发 |
 | `host/` | 机器上的安装脚本和 systemd 单元 |

@@ -21,7 +21,8 @@ Parameters:
     AllowedValues: [t4g.micro, t4g.small, t4g.medium]
   OwnerEmail:
     Type: String
-    Description: Shown on the sign-in page
+    Default: owner@localhost
+    Description: Account email the Orca desktop shows after sign-in (not shown on the public sign-in page)
   OwnerPassword:
     Type: String
     NoEcho: true

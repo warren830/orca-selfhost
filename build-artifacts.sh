@@ -1,14 +1,15 @@
 #!/bin/bash
 # Build everything the host needs on this machine and upload it to S3.
-# China regions reach GitHub, npm and Docker Hub poorly, so the host never
-# downloads from them: it only pulls this bundle from same-region S3.
+# The host has no internet route (and China regions reach GitHub, npm and Docker Hub
+# poorly), so it never downloads from them: it only pulls this bundle from same-region S3.
 #
 # Usage: ./build-artifacts.sh <s3-bucket> [aws-profile] [aws-region]
+# Env:   ORCA_DIR (default ~/code/orca): a clone of stablyai/orca to build the relay from
 set -euo pipefail
 
 BUCKET="${1:?usage: build-artifacts.sh <s3-bucket> [aws-profile] [aws-region]}"
 PROFILE="${2:-default}"
-REGION="${3:-cn-northwest-1}"
+REGION="${3:-ap-east-1}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ORCA_DIR="${ORCA_DIR:-$HOME/code/orca}"
 NODE_MAJOR=24
@@ -34,6 +35,7 @@ git -C "$ORCA_DIR" rev-parse HEAD > "$OUT/relay/ORCA_COMMIT"
 # Upstream combined mode only accepts assignment epoch 1, but every re-placement (e.g. a
 # lease that expired while the Mac slept) bumps the epoch and locks the host out with
 # relay_control_not_active. Check the stored epoch instead, as stamped cells do.
+# shellcheck disable=SC2016 # the ${...} below is a JavaScript template literal
 node -e '
 const fs = require("fs")
 const file = process.argv[1]

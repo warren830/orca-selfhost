@@ -5,6 +5,9 @@ Wants=network-online.target
 
 [Service]
 User=orca
+# CloudFront VPC origins reach this port over the private subnet; the security group
+# admits only CloudFront, and the instance has no public IP.
+Environment=HOST=0.0.0.0
 EnvironmentFile=/etc/orca-selfhost/auth.env
 WorkingDirectory=/opt/orca-selfhost/auth
 ExecStart=/opt/orca-selfhost/bin/node server.mjs

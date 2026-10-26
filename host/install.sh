@@ -26,6 +26,10 @@ tar -xzf "$work/bundle.tar.gz" -C "$work"
 rm -rf "$APP.new" && mv "$work/orca-selfhost" "$APP.new"
 rm -rf "$APP.old" && { [ -d "$APP" ] && mv "$APP" "$APP.old" || true; } && mv "$APP.new" "$APP"
 chmod 755 "$APP/bin/node"
+# Keep the installer itself current so later runs pick up fixes from new bundles.
+# Rename into place: bash is still reading the old file.
+install -m 0755 "$APP/install.sh" /usr/local/sbin/orca-selfhost-install.new
+mv -f /usr/local/sbin/orca-selfhost-install.new /usr/local/sbin/orca-selfhost-install
 
 mkdir -p "$DATA/relay" "$DATA/auth"
 chown -R orca:orca "$DATA"
@@ -41,6 +45,7 @@ cat > "$CONF/relay.env" <<EOF
 NODE_ENV=production
 PORT=8080
 ORCA_RELAY_ROLE=combined
+# Must be one of the relay's built-in (GCP-style) region names; with a single cell it is only a label.
 ORCA_RELAY_REGION=asia-east2
 ORCA_RELAY_PUBLIC_URL=https://${RELAY_DOMAIN}
 ORCA_RELAY_CELL_URL=https://${RELAY_DOMAIN}

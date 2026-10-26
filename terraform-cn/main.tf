@@ -31,12 +31,13 @@ variable "instance_type" {
 
 variable "relay_domain" {
   type        = string
-  default     = "relay.example.com"
-  description = "ICP-filed domain served by CloudFront; auth and relay share it"
+  description = "Domain with an ICP filing made through AWS China, served by CloudFront; auth and relay share it"
 }
 
 variable "owner_email" {
-  type = string
+  type        = string
+  default     = "owner@localhost"
+  description = "Account email the Orca desktop shows after sign-in"
 }
 
 variable "private_subnet_cidr" {
@@ -394,8 +395,9 @@ resource "aws_instance" "relay" {
     encrypted   = true
   }
   lifecycle {
-    # "Patch Group" is set by the account's patch automation, not by us.
-    ignore_changes = [ami, tags["Patch Group"], tags_all["Patch Group"]]
+    # User data only runs at first boot (see the README for changing the password), so
+    # editing it would just stop and start the instance. Patch automation may add "Patch Group".
+    ignore_changes = [ami, user_data_base64, tags["Patch Group"], tags_all["Patch Group"]]
   }
   depends_on = [aws_vpc_endpoint.s3, aws_vpc_endpoint.ssm]
   tags       = { Name = "orca-selfhost-relay" }

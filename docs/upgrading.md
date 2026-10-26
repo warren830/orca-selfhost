@@ -16,10 +16,10 @@
 
 Orca 官方的约定（`docs/reference/remote-wire-compatibility.md`）是桌面端和服务端各自独立更新、版本不一致是常态，新字段必须向后兼容，所以大多数小版本更新不会出问题。
 
-当前部署对应的版本，供以后比对：
+本仓库最后验证过的组合，供出问题时比对：
 
-- 服务端 relay 来自 `stablyai/orca` commit `a4606cc`（2026-09-30）。机器上用 `cat /opt/orca-selfhost/relay/ORCA_COMMIT` 查看。
-- 当时的桌面端是 Orca 1.4.216。本机用 `defaults read /Applications/Orca.app/Contents/Info CFBundleShortVersionString` 查看。
+- 服务端 relay：`stablyai/orca` commit `a4606cc`（2026-09-30）。你的机器上用 `cat /opt/orca-selfhost/relay/ORCA_COMMIT` 查看。
+- 桌面端：Orca 1.4.216。本机用 `defaults read /Applications/Orca.app/Contents/Info CFBundleShortVersionString` 查看。
 
 ## 更新后出问题的排查顺序
 

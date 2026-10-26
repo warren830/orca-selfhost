@@ -9,6 +9,8 @@ import { SignJWT, jwtVerify, generateKeyPair, exportJWK, importJWK } from 'jose'
 
 const env = process.env
 const PORT = Number(env.PORT ?? 8787)
+// Loopback unless told otherwise; the host's systemd unit opens it to the private subnet.
+const HOST = env.HOST ?? '127.0.0.1'
 const ISSUER = required('AUTH_ISSUER').replace(/\/$/, '')
 const CLIENT_ID = env.AUTH_CLIENT_ID ?? 'orca-desktop'
 const OWNER_EMAIL = env.OWNER_EMAIL ?? 'owner@localhost'
@@ -105,6 +107,7 @@ function send(res, status, body, headers = {}) {
   res.writeHead(status, {
     'content-type': isString ? 'text/html; charset=utf-8' : 'application/json',
     'cache-control': 'no-store',
+    ...(isString ? { 'content-security-policy': "frame-ancestors 'none'", 'x-frame-options': 'DENY' } : {}),
     ...headers
   })
   res.end(isString ? body : JSON.stringify(body))
@@ -185,7 +188,7 @@ function loginPage(params, message = '') {
 <style>body{font-family:system-ui;max-width:360px;margin:15vh auto;padding:0 16px}
 input[type=password]{width:100%;padding:8px;font-size:16px;box-sizing:border-box}
 button{margin-top:12px;padding:8px 16px;font-size:15px}.err{color:#c00}</style></head><body>
-<h2>Orca relay sign-in</h2><p>${escapeHtml(OWNER_EMAIL)}</p>
+<h2>Orca relay sign-in</h2>
 ${message ? `<p class="err">${escapeHtml(message)}</p>` : ''}
 <form method="post" action="/v1/desktop/auth/authorize">${hidden}
 <input type="password" name="password" placeholder="Password" autofocus required>
@@ -317,4 +320,4 @@ createServer((req, res) => {
     if (!res.headersSent) send(res, error.status ?? 500, { error: error.status ? error.message : 'internal_error' })
     if (!error.status) console.error('[orca-auth]', error)
   })
-}).listen(PORT, () => console.log(`[orca-auth] listening on :${PORT}, issuer ${ISSUER}`))
+}).listen(PORT, HOST, () => console.log(`[orca-auth] listening on ${HOST}:${PORT}, issuer ${ISSUER}`))

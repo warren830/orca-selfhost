@@ -3,7 +3,8 @@
 # then build + upload the host bundle. Re-running updates the stack and bundle.
 #
 # Usage: cloudformation/deploy.sh [stack-name] [region] [aws-profile]
-# Env:   OWNER_EMAIL (default: git user.email), OWNER_PASSWORD (generated if unset)
+# Env:   OWNER_EMAIL (account email shown in Orca; default owner@localhost),
+#        OWNER_PASSWORD (generated if unset)
 set -euo pipefail
 
 STACK="${1:-orca-relay}"
@@ -20,16 +21,17 @@ az=$("${AWS[@]}" ec2 describe-instance-type-offerings --location-type availabili
 prefix_list=$("${AWS[@]}" ec2 describe-managed-prefix-lists \
   --filters Name=prefix-list-name,Values=com.amazonaws.global.cloudfront.origin-facing \
   --query 'PrefixLists[0].PrefixListId' --output text)
-email="${OWNER_EMAIL:-$(git config user.email)}"
 
-password_args=()
+# On updates an omitted parameter keeps its previous value, so the email and password
+# survive re-runs; a new stack falls back to the template default / a generated password.
+optional_args=()
+[ -z "${OWNER_EMAIL:-}" ] || optional_args+=("OwnerEmail=$OWNER_EMAIL")
 if [ -n "${OWNER_PASSWORD:-}" ]; then
   password="$OWNER_PASSWORD"
 elif ! "${AWS[@]}" cloudformation describe-stacks --stack-name "$STACK" >/dev/null 2>&1; then
   password="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24)"
 fi
-# On updates an omitted parameter keeps its previous value, so the password survives re-runs.
-[ -z "${password:-}" ] || password_args=("OwnerPassword=$password")
+[ -z "${password:-}" ] || optional_args+=("OwnerPassword=$password")
 
 echo "==> deploying stack $STACK in $REGION (vpc $vpc, az $az, prefix list $prefix_list)"
 "${AWS[@]}" cloudformation deploy \
@@ -39,7 +41,7 @@ echo "==> deploying stack $STACK in $REGION (vpc $vpc, az $az, prefix list $pref
   --no-fail-on-empty-changeset \
   --parameter-overrides \
     "VpcId=$vpc" "AvailabilityZone=$az" "CloudFrontPrefixListId=$prefix_list" \
-    "OwnerEmail=$email" ${password_args[@]+"${password_args[@]}"}
+    ${optional_args[@]+"${optional_args[@]}"}
 
 output() {
   "${AWS[@]}" cloudformation describe-stacks --stack-name "$STACK" \

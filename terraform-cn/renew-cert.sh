@@ -5,10 +5,12 @@
 # Safe to run daily: it does nothing until the current certificate is within
 # RENEW_DAYS of expiry.
 #
-# Needs ~/.config/orca-selfhost/dnspod.env with Tencent_SecretId / Tencent_SecretKey.
+# Usage: DOMAIN=relay.example.com [PROFILE=default] [DISTRIBUTION_ID=E...] ./renew-cert.sh
+# Needs ~/.config/orca-selfhost/dnspod.env with Tencent_SecretId / Tencent_SecretKey,
+# and ACME_EMAIL (your Let's Encrypt account email) the first time, to install acme.sh.
 set -euo pipefail
 
-DOMAIN="${DOMAIN:-relay.example.com}"
+DOMAIN="${DOMAIN:?set DOMAIN to the relay domain (terraform var relay_domain)}"
 PROFILE="${PROFILE:-default}"
 REGION="${REGION:-cn-northwest-1}"
 RENEW_DAYS="${RENEW_DAYS:-30}"
@@ -59,7 +61,7 @@ export Tencent_SecretId Tencent_SecretKey
 if [ ! -x "$ACME" ]; then
   log "installing acme.sh"
   curl -fsSL https://raw.githubusercontent.com/acmesh-official/acme.sh/master/acme.sh |
-    sh -s -- --install-online --nocron -m "${ACME_EMAIL:-you@example.com}" >/dev/null
+    sh -s -- --install-online --nocron -m "${ACME_EMAIL:?set ACME_EMAIL to install acme.sh}" >/dev/null
 fi
 
 # CloudFront China is only known to accept RSA certificates from IAM.
@@ -85,5 +87,4 @@ if [ -n "$DISTRIBUTION_ID" ]; then
   rm -f "$tmp"
   log "distribution $DISTRIBUTION_ID now uses $new_name"
   cleanup_superseded "$new_name"
-
 fi

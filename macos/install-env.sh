@@ -23,6 +23,8 @@ fi
 DOMAIN="${1:?usage: install-env.sh <relay-domain> | --uninstall}"
 DOMAIN="${DOMAIN#https://}"
 DOMAIN="${DOMAIN%/}"
+# It is pasted into the plist and a shell command, so accept a bare hostname only.
+[[ "$DOMAIN" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] || { echo "not a hostname: $DOMAIN" >&2; exit 1; }
 
 mkdir -p "$(dirname "$PLIST")"
 cat > "$PLIST" <<PLIST

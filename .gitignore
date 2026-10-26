@@ -8,3 +8,4 @@ tfplan
 .terraform.lock.hcl.bak
 data/
 .env
+.DS_Store
